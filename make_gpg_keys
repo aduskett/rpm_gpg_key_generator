@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+set -eu
+set -o pipefail
+
+CWD=$(pwd)
+WORK_DIR="${CWD}"/work
+OUTPUT_DIR="${CWD}"/output
+GPG_HOME_DIR="${WORK_DIR}"/gpg_home
+GPG_BATCH_FILE=""
+NAME="testuser"
+COMMENT="nocomment"
+EMAIL="testuser@email.com"
+EXPIRE_DATE="0"
+PASSPHRASE="test123"
+SKIP_CLEANUP="false"
+
+print_help()
+{
+    echo "usage: make_gpg_keys [-h] -b -c -d -e -n -o -p [s] -x"
+    echo ""
+    echo "options:"
+    echo "-h, --help              Show this help message and exit."
+    echo "-b, --gpg-batch-file    GPG batch file location. If unspecified, one will be generated automatically."
+    echo "-c, --comment           GPG key comment."
+    echo "-d, --gpg-home-dir      GPG home directory location. Must not be ${HOME}/.gnupg"
+    echo "-e, --email             GPG key email address/"
+    echo "-n, --name              Name used for the GPG key."
+    echo "-o, --output            Output directory for the armored GPG key, key secret, and key passphrase."
+    echo "-p, --passphrase        GPG key passphrase."
+    echo "-s, --skip-cleanup      Do not remove the work directory after creating the keys."
+    echo "-x, --expire-date       GPG key expiration date."
+    echo ""
+    exit 0
+}
+
+parse_args() {
+  local o O opts
+  o='hb:c:d:e:n:o:p:sx:'
+  O='help,gpg-batch-file:,comment:,email:,gpg-home-dir:,name:,output:,passphrase:skip-cleanup,expire-date:'
+  opts="$(getopt -o "${o}" -l "${O}" -- "${@}")"
+  eval set -- "${opts}"
+
+  while [[ ${#} -gt 0 ]]; do
+    case "${1}" in
+    (-h|--help)
+      print_help
+      ;;
+    (-b|--gpg-batch-file)
+      GPG_BATCH_FILE="${2}"
+      shift 2
+      ;;
+    (-c|--comment)
+      COMMENT="${2}"
+      shift 2
+      ;;
+    (-d|--gpg-home-dir)
+      GPG_HOME_DIR="${2}"
+      shift 2
+      ;;
+    (-e|--email)
+      EMAIL="${2}"
+      shift 2
+      ;;
+    (-n|--name)
+      NAME="${2}"
+      shift 2
+      ;;
+    (-o|--output)
+      OUTPUT_DIR="${2}"
+      shift 2
+      ;;
+    (-p|--passphrase:)
+      PASSPHRASE="${2}"
+      shift 2
+      ;;
+    (-s|--skip-cleanup)
+      SKIP_CLEANUP="True"
+      shift 1
+      ;;
+    (-x|--expire-date)
+      EXPIRE_DATE="${2}"
+      shift 2
+      ;;
+    (--)
+        shift; break
+        ;;
+    *)
+      print_help
+    esac
+  done
+
+  if [[ "${OUTPUT_DIR}" == "${HOME}"/.gnupg ]]; then
+    echo "The output directory must not be ${HOME}/.gnupg!"
+    exit 1
+  fi
+}
+
+gen_batch_file() {
+  GPG_BATCH_FILE="${GPG_BATCH_FILE:-${WORK_DIR}/gpg.batch}"
+  if [[ ! -e "${GPG_BATCH_FILE}" ]]; then
+
+cat <<- EOF > "${GPG_BATCH_FILE}"
+%echo Generating RPM GPG Keys
+Key-Type: RSA
+Key-Length: 4096
+Name-Real: ${NAME}
+Name-Email: ${EMAIL}
+Name-Comment: ${COMMENT}
+Expire-Date: ${EXPIRE_DATE}
+passphrase: ${PASSPHRASE}
+%commit
+%echo done
+EOF
+  fi
+}
+
+gen_keys() {
+  gpg \
+      --verbose \
+      --batch \
+      --gen-key \
+      --homedir "${GPG_HOME_DIR}" \
+      "${GPG_BATCH_FILE}"
+}
+
+export_keys() {
+    gpg_base="gpg \
+      --batch \
+      --homedir=${GPG_HOME_DIR} \
+      --pinentry-mode=loopback \
+      --passphrase ${PASSPHRASE} \
+      --armor"
+
+    mkdir -p "${OUTPUT_DIR}"
+    chmod 0700 "${OUTPUT_DIR}"
+
+    keyid="$(gpg \
+      --homedir="${GPG_HOME_DIR}" \
+      --list-secret-keys \
+      --with-colons | grep -E "^sec:" |cut -d: -f5)"
+
+    if [[ -z "${keyid}" ]]; then
+      echo "Could not get keyid from ${GPG_HOME_DIR}!"
+      exit 1
+    fi
+
+    ${gpg_base} \
+      --output "${OUTPUT_DIR}"/key.pub \
+      --export "${keyid}"
+
+    ${gpg_base} \
+      --output "${OUTPUT_DIR}"/key.secret \
+      --export-secret-key "${keyid}"
+
+    echo "${PASSPHRASE}" > "${OUTPUT_DIR}"/key.passphrase
+}
+
+cleanup() {
+  if [[ "${SKIP_CLEANUP}" == "false" ]]; then
+    rm -rf "${WORK_DIR}"
+  fi
+}
+
+main() {
+    parse_args "${@}"
+
+    mkdir -p "${GPG_HOME_DIR}"
+    chmod 0700 "${GPG_HOME_DIR}"
+
+    gen_batch_file
+    gen_keys
+    export_keys
+    cleanup
+
+    echo "Keys are found in ${OUTPUT_DIR}"
+}
+
+main "${@}"
