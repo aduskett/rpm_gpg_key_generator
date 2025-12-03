@@ -12,7 +12,6 @@ COMMENT="nocomment"
 EMAIL="testuser@email.com"
 EXPIRE_DATE="0"
 PASSPHRASE="test123"
-SKIP_CLEANUP="false"
 
 print_help()
 {
@@ -27,7 +26,6 @@ print_help()
     echo "-n, --name              Name used for the GPG key."
     echo "-o, --output            Output directory for the armored GPG key, key secret, and key passphrase."
     echo "-p, --passphrase        GPG key passphrase."
-    echo "-s, --skip-cleanup      Do not remove the work directory after creating the keys."
     echo "-x, --expire-date       GPG key expiration date."
     echo ""
     exit 0
@@ -155,12 +153,6 @@ export_keys() {
     echo "${PASSPHRASE}" > "${OUTPUT_DIR}"/key.passphrase
 }
 
-cleanup() {
-  if [[ "${SKIP_CLEANUP}" == "false" ]]; then
-    rm -rf "${WORK_DIR}"
-  fi
-}
-
 main() {
     parse_args "${@}"
 
@@ -170,7 +162,6 @@ main() {
     gen_batch_file
     gen_keys
     export_keys
-    cleanup
 
     echo "Keys are found in ${OUTPUT_DIR}"
 }
