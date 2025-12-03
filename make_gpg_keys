@@ -160,13 +160,77 @@ make_rpm_package_keys() {
   export_keys "packages"
 }
 
+make_yocto_gpg_conf() {
+
+  PDIR="$(dirname "${CWD}")"
+  local gpg_base="${GPG_HOME_DIR}"
+  local gpg_home_dir="${GPG_HOME_DIR}"
+
+  if [[ -e "${PDIR}"/kas/simple-image.yaml ]]; then
+      # We want this to without expansion
+      # shellcheck disable=SC2016
+      gpg_base='${TOPDIR}/../rpm_gpg_key_generator'
+      gpg_home_dir="${gpg_base}"/output/gpg_home
+
+  fi
+
+
+cat <<- EOF > "${OUTPUT_DIR}"/gpg.conf
+# Image changes necessary to enable rpm signing
+# ============================
+
+# Enable repository signing
+INHERIT += "sign_package_feed"
+
+# Enable rpm package signing
+INHERIT += "sign_rpm"
+PACKAGE_CLASSES = "package_rpm"
+
+# RPM must be built with sequoia to enable rpm signing
+PACKAGECONFIG:append:pn-rpm = " sequoia"
+PACKAGECONFIG:append:pn-rpm-native = " sequoia"
+
+# Path to GPG home directory.
+GPG_PATH = "${gpg_home_dir}"
+
+# RPM repository settings
+# ============================
+
+# Repo server URL. Set for runqemu.
+# Run the repo with 'python3 -m http.server 8080'
+PACKAGE_FEED_URIS = "http://192.168.7.1:8080"
+
+# RPM repository Key name and password file
+PACKAGE_FEED_GPG_NAME = "${NAME} (RPM repo GPG Keys)"
+PACKAGE_FEED_GPG_PASSPHRASE_FILE = "${gpg_base}/output/repo/key.passphrase"
+
+# ============================
+# RPM package signing settings
+
+RPM_GPG_NAME = "${NAME} (RPM packages GPG Keys)"
+RPM_GPG_PASSPHRASE = "${PASSPHRASE}"
+EOF
+
+}
+
+sanity_check() {
+  local sanity_check="${GPG_HOME_DIR}"/gnupg_spawn_agent_sentinel.lock
+  if [[ "${#sanity_check}" -ge 108 ]]; then
+    echo "ERROR! The location of ${GPG_HOME_DIR} would exceed the max length of a unix socket (108)!"
+    echo "This would result in package signing failures with the error: 'gpg: can't connect to the agent: File name too long!'"
+    echo "Please choose a different output path with the -o argument!"
+    exit 1
+  fi
+}
+
 main() {
     parse_args "${@}"
-
+    sanity_check
     mkdir -p "${GPG_HOME_DIR}"
     chmod 0700 "${GPG_HOME_DIR}"
     make_rpm_repo_keys
     make_rpm_package_keys
+    make_yocto_gpg_conf
     echo "Keys are found in ${OUTPUT_DIR}"
 }
 
