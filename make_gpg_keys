@@ -3,24 +3,22 @@ set -eu
 set -o pipefail
 
 CWD=$(pwd)
-WORK_DIR="${CWD}"/work
+TMP_DIR="${CWD}"/tmp
 OUTPUT_DIR="${CWD}"/output
-GPG_HOME_DIR="${WORK_DIR}"/gpg_home
+GPG_HOME_DIR="${OUTPUT_DIR}"/gpg_home
 GPG_BATCH_FILE=""
 NAME="testuser"
-COMMENT="nocomment"
 EMAIL="testuser@email.com"
 EXPIRE_DATE="0"
 PASSPHRASE="test123"
 
 print_help()
 {
-    echo "usage: make_gpg_keys [-h] -b -c -d -e -n -o -p [s] -x"
+    echo "usage: make_gpg_keys [-h] -b -c -d -e -n -o -p -x"
     echo ""
     echo "options:"
     echo "-h, --help              Show this help message and exit."
     echo "-b, --gpg-batch-file    GPG batch file location. If unspecified, one will be generated automatically."
-    echo "-c, --comment           GPG key comment."
     echo "-d, --gpg-home-dir      GPG home directory location. Must not be ${HOME}/.gnupg"
     echo "-e, --email             GPG key email address/"
     echo "-n, --name              Name used for the GPG key."
@@ -33,8 +31,8 @@ print_help()
 
 parse_args() {
   local o O opts
-  o='hb:c:d:e:n:o:p:sx:'
-  O='help,gpg-batch-file:,comment:,email:,gpg-home-dir:,name:,output:,passphrase:skip-cleanup,expire-date:'
+  o='hb:d:e:n:o:p:x:'
+  O='help,gpg-batch-file:,email:,gpg-home-dir:,name:,output:,passphrase:,expire-date:'
   opts="$(getopt -o "${o}" -l "${O}" -- "${@}")"
   eval set -- "${opts}"
 
@@ -45,10 +43,6 @@ parse_args() {
       ;;
     (-b|--gpg-batch-file)
       GPG_BATCH_FILE="${2}"
-      shift 2
-      ;;
-    (-c|--comment)
-      COMMENT="${2}"
       shift 2
       ;;
     (-d|--gpg-home-dir)
@@ -71,10 +65,6 @@ parse_args() {
       PASSPHRASE="${2}"
       shift 2
       ;;
-    (-s|--skip-cleanup)
-      SKIP_CLEANUP="True"
-      shift 1
-      ;;
     (-x|--expire-date)
       EXPIRE_DATE="${2}"
       shift 2
@@ -94,16 +84,19 @@ parse_args() {
 }
 
 gen_batch_file() {
-  GPG_BATCH_FILE="${GPG_BATCH_FILE:-${WORK_DIR}/gpg.batch}"
+  local batch_comment="RPM ${1} GPG Keys"
+  GPG_BATCH_FILE="${GPG_BATCH_FILE:-${TMP_DIR}/gpg.batch}"
+  mkdir -p "${TMP_DIR}"
+
   if [[ ! -e "${GPG_BATCH_FILE}" ]]; then
 
 cat <<- EOF > "${GPG_BATCH_FILE}"
-%echo Generating RPM GPG Keys
+%echo Generating RPM ${1} GPG Keys
 Key-Type: RSA
 Key-Length: 4096
 Name-Real: ${NAME}
 Name-Email: ${EMAIL}
-Name-Comment: ${COMMENT}
+Name-Comment: ${batch_comment}
 Expire-Date: ${EXPIRE_DATE}
 passphrase: ${PASSPHRASE}
 %commit
@@ -114,14 +107,18 @@ EOF
 
 gen_keys() {
   gpg \
-      --verbose \
       --batch \
       --gen-key \
       --homedir "${GPG_HOME_DIR}" \
       "${GPG_BATCH_FILE}"
+
+  rm -rf "${TMP_DIR}"
 }
 
 export_keys() {
+    local export_comment="RPM ${1} GPG Keys"
+    local output_dir="${OUTPUT_DIR}"/"${1}"
+
     gpg_base="gpg \
       --batch \
       --homedir=${GPG_HOME_DIR} \
@@ -129,28 +126,38 @@ export_keys() {
       --passphrase ${PASSPHRASE} \
       --armor"
 
-    mkdir -p "${OUTPUT_DIR}"
-    chmod 0700 "${OUTPUT_DIR}"
+    mkdir -p "${output_dir}"
+    chmod 0700 "${output_dir}"
 
-    keyid="$(gpg \
-      --homedir="${GPG_HOME_DIR}" \
-      --list-secret-keys \
-      --with-colons | grep -E "^sec:" |cut -d: -f5)"
+    sanity_check="$(gpg --homedir="${GPG_HOME_DIR}" \
+      --list-secret-keys | grep "${export_comment}")"
 
-    if [[ -z "${keyid}" ]]; then
-      echo "Could not get keyid from ${GPG_HOME_DIR}!"
+    if [[ -z "${sanity_check}" ]]; then
+      echo "Key with comment: ${export_comment} does not exist in ${GPG_HOME_DIR}!"
       exit 1
     fi
 
     ${gpg_base} \
-      --output "${OUTPUT_DIR}"/key.pub \
-      --export "${keyid}"
+      --output "${output_dir}"/key.pub \
+      --export "${export_comment}"
 
     ${gpg_base} \
-      --output "${OUTPUT_DIR}"/key.secret \
-      --export-secret-key "${keyid}"
+      --output "${output_dir}"/key.secret \
+      --export-secret-key "${export_comment}"
 
-    echo "${PASSPHRASE}" > "${OUTPUT_DIR}"/key.passphrase
+    echo "${PASSPHRASE}" > "${output_dir}"/key.passphrase
+}
+
+make_rpm_repo_keys() {
+  gen_batch_file "repo"
+  gen_keys
+  export_keys "repo"
+}
+
+make_rpm_package_keys() {
+  gen_batch_file "packages"
+  gen_keys
+  export_keys "packages"
 }
 
 main() {
@@ -158,11 +165,8 @@ main() {
 
     mkdir -p "${GPG_HOME_DIR}"
     chmod 0700 "${GPG_HOME_DIR}"
-
-    gen_batch_file
-    gen_keys
-    export_keys
-
+    make_rpm_repo_keys
+    make_rpm_package_keys
     echo "Keys are found in ${OUTPUT_DIR}"
 }
 
