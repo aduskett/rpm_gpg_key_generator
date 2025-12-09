@@ -3,6 +3,7 @@ set -eu
 set -o pipefail
 
 CWD=$(pwd)
+BASENAME="$(basename $(pwd))"
 TMP_DIR="${CWD}"/tmp
 OUTPUT_DIR="${CWD}"/output
 GPG_HOME_DIR="${OUTPUT_DIR}"/gpg_home
@@ -161,15 +162,12 @@ make_rpm_package_keys() {
 }
 
 make_yocto_gpg_conf() {
-
   PDIR="$(dirname "${CWD}")"
-  local gpg_base="${GPG_HOME_DIR}"
+  local gpg_base="${CWD}"
   local gpg_home_dir="${GPG_HOME_DIR}"
 
   if [[ -e "${PDIR}"/kas/simple-image.yaml ]]; then
-      # We want this to without expansion
-      # shellcheck disable=SC2016
-      gpg_base='${TOPDIR}/../rpm_gpg_key_generator'
+      gpg_base="\${TOPDIR}/../${BASENAME}"
       gpg_home_dir="${gpg_base}"/output/gpg_home
 
   fi
